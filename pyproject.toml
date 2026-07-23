@@ -8,4 +8,5 @@ dependencies = [
     "fastapi[standard]>=0.139.2",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
+    "ray[serve]>=2.56.1",
 ]
