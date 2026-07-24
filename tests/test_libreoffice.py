@@ -9,41 +9,42 @@ from unittest.mock import patch
 from parser_serve.utils.libreoffice import (
     LibreOfficeConversionError,
     LibreOfficeNotFoundError,
-    convert_with_libreoffice,
+    UnsupportedLegacyOfficeFormatError,
+    convert_legacy_office,
 )
 
 
-class ConvertWithLibreOfficeTests(unittest.TestCase):
+class ConvertLegacyOfficeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
-        self.source = self.root / "example document.docx"
+        self.source = self.root / "example document.doc"
         self.source.write_bytes(b"test document")
 
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
     @patch("parser_serve.utils.libreoffice.subprocess.run")
-    def test_converts_document_and_returns_output_path(self, run_mock) -> None:
+    def test_converts_doc_to_docx_and_returns_output_path(self, run_mock) -> None:
         output_dir = self.root / "converted"
 
         def create_output(command, **kwargs):
-            (output_dir / "example document.pdf").write_bytes(b"%PDF")
+            (output_dir / "example document.docx").write_bytes(b"converted")
             return subprocess.CompletedProcess(command, 0, "converted", "")
 
         run_mock.side_effect = create_output
 
-        result = convert_with_libreoffice(
+        result = convert_legacy_office(
             self.source,
             output_dir=output_dir,
             executable="/usr/bin/libreoffice",
         )
 
-        self.assertEqual(result, (output_dir / "example document.pdf").resolve())
+        self.assertEqual(result, (output_dir / "example document.docx").resolve())
         command = run_mock.call_args.args[0]
         self.assertEqual(command[0], "/usr/bin/libreoffice")
         self.assertIn("--headless", command)
-        self.assertEqual(command[command.index("--convert-to") + 1], "pdf")
+        self.assertEqual(command[command.index("--convert-to") + 1], "docx")
         self.assertEqual(
             command[command.index("--outdir") + 1],
             str(output_dir.resolve()),
@@ -53,28 +54,41 @@ class ConvertWithLibreOfficeTests(unittest.TestCase):
         run_mock.assert_called_once()
 
     @patch("parser_serve.utils.libreoffice.subprocess.run")
-    def test_supports_libreoffice_filter_format(self, run_mock) -> None:
-        source = self.root / "example document.odt"
-        source.write_bytes(b"test document")
+    def test_converts_ppt_to_pptx_case_insensitively(self, run_mock) -> None:
+        source = self.root / "slides.PPT"
+        source.write_bytes(b"test presentation")
 
         def create_output(command, **kwargs):
-            (self.root / "example document.docx").write_bytes(b"converted")
+            (self.root / "slides.pptx").write_bytes(b"converted")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         run_mock.side_effect = create_output
 
-        result = convert_with_libreoffice(
+        result = convert_legacy_office(
             source,
-            output_format="docx:Office Open XML Text",
             executable="soffice",
         )
 
-        self.assertEqual(result.suffix, ".docx")
+        self.assertEqual(result, (self.root / "slides.pptx").resolve())
         command = run_mock.call_args.args[0]
-        self.assertEqual(
-            command[command.index("--convert-to") + 1],
-            "docx:Office Open XML Text",
-        )
+        self.assertEqual(command[command.index("--convert-to") + 1], "pptx")
+
+    @patch("parser_serve.utils.libreoffice.subprocess.run")
+    def test_converts_xls_to_xlsx(self, run_mock) -> None:
+        source = self.root / "workbook.xls"
+        source.write_bytes(b"test workbook")
+
+        def create_output(command, **kwargs):
+            (self.root / "workbook.xlsx").write_bytes(b"converted")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        run_mock.side_effect = create_output
+
+        result = convert_legacy_office(source, executable="soffice")
+
+        self.assertEqual(result, (self.root / "workbook.xlsx").resolve())
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[command.index("--convert-to") + 1], "xlsx")
 
     @patch(
         "parser_serve.utils.libreoffice.shutil.which",
@@ -83,12 +97,12 @@ class ConvertWithLibreOfficeTests(unittest.TestCase):
     @patch("parser_serve.utils.libreoffice.subprocess.run")
     def test_falls_back_to_soffice(self, run_mock, which_mock) -> None:
         def create_output(command, **kwargs):
-            (self.root / "example document.pdf").write_bytes(b"%PDF")
+            (self.root / "example document.docx").write_bytes(b"converted")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         run_mock.side_effect = create_output
 
-        convert_with_libreoffice(self.source)
+        convert_legacy_office(self.source)
 
         self.assertEqual(run_mock.call_args.args[0][0], "/usr/local/bin/soffice")
         self.assertEqual(
@@ -98,15 +112,27 @@ class ConvertWithLibreOfficeTests(unittest.TestCase):
 
     def test_rejects_missing_source(self) -> None:
         with self.assertRaises(FileNotFoundError):
-            convert_with_libreoffice(
-                self.root / "missing.docx",
+            convert_legacy_office(
+                self.root / "missing.doc",
                 executable="libreoffice",
             )
+
+    @patch("parser_serve.utils.libreoffice.subprocess.run")
+    def test_rejects_non_legacy_office_formats(self, run_mock) -> None:
+        for suffix in (".docx", ".pptx", ".xlsx", ".pdf", ""):
+            with self.subTest(suffix=suffix):
+                source = self.root / f"unsupported{suffix}"
+                source.write_bytes(b"unsupported")
+
+                with self.assertRaises(UnsupportedLegacyOfficeFormatError):
+                    convert_legacy_office(source, executable="libreoffice")
+
+        run_mock.assert_not_called()
 
     @patch("parser_serve.utils.libreoffice.shutil.which", return_value=None)
     def test_reports_missing_libreoffice(self, which_mock) -> None:
         with self.assertRaises(LibreOfficeNotFoundError):
-            convert_with_libreoffice(self.source)
+            convert_legacy_office(self.source)
 
         self.assertEqual(which_mock.call_count, 2)
 
@@ -123,7 +149,7 @@ class ConvertWithLibreOfficeTests(unittest.TestCase):
             LibreOfficeConversionError,
             "source format could not be loaded",
         ):
-            convert_with_libreoffice(self.source, executable="libreoffice")
+            convert_legacy_office(self.source, executable="libreoffice")
 
     @patch("parser_serve.utils.libreoffice.subprocess.run")
     def test_reports_timeout(self, run_mock) -> None:
@@ -136,7 +162,7 @@ class ConvertWithLibreOfficeTests(unittest.TestCase):
             LibreOfficeConversionError,
             "timed out",
         ):
-            convert_with_libreoffice(
+            convert_legacy_office(
                 self.source,
                 executable="libreoffice",
                 timeout=1,
@@ -155,18 +181,11 @@ class ConvertWithLibreOfficeTests(unittest.TestCase):
             LibreOfficeConversionError,
             "did not create",
         ):
-            convert_with_libreoffice(self.source, executable="libreoffice")
+            convert_legacy_office(self.source, executable="libreoffice")
 
-    def test_validates_arguments(self) -> None:
+    def test_rejects_nonpositive_timeout(self) -> None:
         with self.assertRaises(ValueError):
-            convert_with_libreoffice(
-                self.source,
-                output_format=" ",
-                executable="libreoffice",
-            )
-
-        with self.assertRaises(ValueError):
-            convert_with_libreoffice(
+            convert_legacy_office(
                 self.source,
                 timeout=0,
                 executable="libreoffice",

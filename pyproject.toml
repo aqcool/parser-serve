@@ -1,12 +1,122 @@
 [project]
 name = "parser-serve"
 version = "0.1.0"
-description = "Add your description here"
+description = "Distributed multimodal content parsing service"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12,<3.14"
 dependencies = [
-    "fastapi[standard]>=0.139.2",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
+]
+
+[project.scripts]
+parser-worker = "parser_serve.worker.__main__:main"
+parser-worker-cpu = "parser_serve.worker.__main__:main"
+
+[project.optional-dependencies]
+# External access protocols. These profiles are useful for lightweight
+# deployments that only need one entrypoint.
+http-api = [
+    "fastapi[standard]>=0.139.2",
+    "prometheus-client>=0.25",
+]
+mcp = [
+    "mcp>=1.0",
+    "prometheus-client>=0.25",
+]
+object-storage = [
+    "boto3>=1.36",
+]
+python-sdk = [
+    "httpx>=0.28",
+]
+telemetry = [
+    "opentelemetry-exporter-otlp-proto-http>=1.39",
+    "opentelemetry-instrumentation-fastapi>=0.60b0",
+    "opentelemetry-instrumentation-httpx>=0.60b0",
+    "opentelemetry-sdk>=1.39",
+]
+
+# Control-plane image: HTTP/MCP entrypoints, persistence, queue, object storage,
+# callbacks, scheduling, and management APIs.
+control-plane = [
+    "alembic>=1.14",
+    "asyncpg>=0.30",
+    "boto3>=1.36",
+    "fastapi[standard]>=0.139.2",
+    "httpx>=0.28",
+    "mcp>=1.0",
+    "prometheus-client>=0.25",
+    "redis[hiredis]>=5.2",
+    "sqlalchemy[asyncio]>=2.0",
+]
+
+# Worker agents pull tasks from the control plane. Vendor SDKs and inference
+# frameworks must only be added to their matching hardware profile.
+worker-cpu = [
+    "httpx>=0.28",
+    "pillow>=11.1",
+    "pypdf>=5.1",
+]
+worker-cuda = [
+    "httpx>=0.28",
+]
+worker-ascend = [
+    "httpx>=0.28",
+]
+worker-mlu = [
+    "httpx>=0.28",
+]
+worker-dcu = [
+    "httpx>=0.28",
+]
+worker-musa = [
+    "httpx>=0.28",
+]
+worker-xpu = [
+    "httpx>=0.28",
+]
+
+# Optional executor for Worker images that run a local or clustered Ray Serve
+# deployment. It is intentionally not part of the core dependency set.
+ray-serve = [
+    "python-multipart>=0.0.20",
     "ray[serve]>=2.56.1",
 ]
+
+[dependency-groups]
+dev = [
+    "aiosqlite>=0.20",
+    "pyright>=1.1.390",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "pyyaml>=6.0",
+    "ruff>=0.9",
+]
+
+[tool.uv]
+# A production Worker image targets exactly one hardware runtime. Ray Serve is
+# an executor and may still be combined with any one of these profiles.
+conflicts = [
+    [
+        { extra = "worker-cpu" },
+        { extra = "worker-cuda" },
+        { extra = "worker-ascend" },
+        { extra = "worker-mlu" },
+        { extra = "worker-dcu" },
+        { extra = "worker-musa" },
+        { extra = "worker-xpu" },
+    ],
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-config --strict-markers"
+
+[tool.coverage.run]
+source = ["parser_serve"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true

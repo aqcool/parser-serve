@@ -1,4 +1,4 @@
-"""Convert documents with LibreOffice in headless mode."""
+"""Upgrade legacy Word, PowerPoint, and Excel files with LibreOffice."""
 
 from __future__ import annotations
 
@@ -8,8 +8,15 @@ import tempfile
 from pathlib import Path
 from typing import Final
 
+from .process_limits import ProcessResourceLimitError, ProcessResourceLimits
+
 
 DEFAULT_TIMEOUT_SECONDS: Final = 120.0
+LEGACY_OFFICE_FORMATS: Final = {
+    ".doc": "docx",
+    ".ppt": "pptx",
+    ".xls": "xlsx",
+}
 
 
 class LibreOfficeConversionError(RuntimeError):
@@ -18,6 +25,10 @@ class LibreOfficeConversionError(RuntimeError):
 
 class LibreOfficeNotFoundError(LibreOfficeConversionError):
     """Raised when a LibreOffice executable cannot be found."""
+
+
+class UnsupportedLegacyOfficeFormatError(ValueError):
+    """Raised when a file is not a supported legacy Office document."""
 
 
 def _find_executable() -> str:
@@ -32,18 +43,10 @@ def _find_executable() -> str:
     )
 
 
-def _validate_output_format(output_format: str) -> str:
-    normalized = output_format.strip().removeprefix(".")
-    if not normalized:
-        raise ValueError("output_format must not be empty")
-
-    file_extension = normalized.partition(":")[0]
-    if not file_extension.isalnum():
-        raise ValueError(
-            "output_format must start with an alphanumeric file extension"
-        )
-
-    return normalized
+def libreoffice_available() -> bool:
+    return any(
+        shutil.which(command) is not None for command in ("libreoffice", "soffice")
+    )
 
 
 def _find_output_file(
@@ -66,24 +69,26 @@ def _find_output_file(
     )
 
 
-def convert_with_libreoffice(
+def convert_legacy_office(
     source: str | Path,
     *,
-    output_format: str = "pdf",
     output_dir: str | Path | None = None,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     executable: str | Path | None = None,
+    resource_limits: ProcessResourceLimits | None = None,
 ) -> Path:
-    """Convert a document using LibreOffice's headless CLI.
+    """Upgrade a legacy Word, PowerPoint, or Excel file.
+
+    Supported conversions are ``.doc`` to ``.docx``, ``.ppt`` to ``.pptx``,
+    and ``.xls`` to ``.xlsx``.
 
     Args:
-        source: File to convert.
-        output_format: LibreOffice output format, such as ``pdf`` or
-            ``docx:Office Open XML Text``.
+        source: Legacy Word, PowerPoint, or Excel file to convert.
         output_dir: Destination directory. Defaults to the source directory.
         timeout: Maximum conversion time in seconds.
         executable: Optional path or command name for LibreOffice. When omitted,
             ``libreoffice`` and ``soffice`` are searched on PATH.
+        resource_limits: Optional Linux process limits enforced through ``prlimit``.
 
     Returns:
         The absolute path of the converted file.
@@ -91,7 +96,9 @@ def convert_with_libreoffice(
     Raises:
         FileNotFoundError: If ``source`` does not exist.
         IsADirectoryError: If ``source`` is not a regular file.
-        ValueError: If the output format or timeout is invalid.
+        UnsupportedLegacyOfficeFormatError: If the source is not ``.doc``,
+            ``.ppt``, or ``.xls``.
+        ValueError: If the timeout is invalid.
         LibreOfficeNotFoundError: If LibreOffice cannot be found.
         LibreOfficeConversionError: If conversion fails or produces no output.
     """
@@ -103,8 +110,14 @@ def convert_with_libreoffice(
     if timeout <= 0:
         raise ValueError("timeout must be greater than zero")
 
-    normalized_format = _validate_output_format(output_format)
-    output_extension = normalized_format.partition(":")[0]
+    try:
+        output_extension = LEGACY_OFFICE_FORMATS[source_path.suffix.casefold()]
+    except KeyError as exc:
+        supported = ", ".join(sorted(LEGACY_OFFICE_FORMATS))
+        raise UnsupportedLegacyOfficeFormatError(
+            f"Unsupported legacy Office format {source_path.suffix or '<none>'!r}; "
+            f"expected one of: {supported}"
+        ) from exc
 
     destination = (
         Path(output_dir).expanduser().resolve()
@@ -130,11 +143,16 @@ def convert_with_libreoffice(
             "--nolockcheck",
             "--nofirststartwizard",
             "--convert-to",
-            normalized_format,
+            output_extension,
             "--outdir",
             str(destination),
             str(source_path),
         ]
+        if resource_limits is not None:
+            try:
+                command = resource_limits.command(command)
+            except ProcessResourceLimitError as exc:
+                raise LibreOfficeConversionError(str(exc)) from exc
 
         try:
             result = subprocess.run(
@@ -174,3 +192,17 @@ def convert_with_libreoffice(
         )
 
     return converted_path.resolve()
+
+
+# Backward-compatible name retained while callers move to the more explicit API.
+convert_with_libreoffice = convert_legacy_office
+
+
+__all__ = [
+    "LibreOfficeConversionError",
+    "LibreOfficeNotFoundError",
+    "UnsupportedLegacyOfficeFormatError",
+    "convert_legacy_office",
+    "convert_with_libreoffice",
+    "libreoffice_available",
+]

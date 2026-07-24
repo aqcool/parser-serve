@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Node",
+    "baseUrl": ".",
+    "paths": {"@/*": ["src/*"]},
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true
+  },
+  "include": [
+    "typecheck-stubs.d.ts",
+    "src/stores/connection.ts",
+    "src/api/generated.ts",
+    "src/api/generated-client.ts",
+    "src/api/client.ts"
+  ]
+}

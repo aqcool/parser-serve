@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Sync locked dependencies
+        run: >
+          uv sync --frozen
+          --python ${{ matrix.python-version }}
+          --extra control-plane
+          --extra worker-cpu
+          --extra telemetry
+
+      - name: Check formatting
+        run: uv run ruff format --check parser_serve tests migrations scripts
+
+      - name: Lint
+        run: uv run ruff check parser_serve tests migrations scripts
+
+      - name: Type check
+        run: uv run pyright parser_serve
+
+      - name: Test with coverage
+        run: >
+          uv run pytest
+          --cov=parser_serve
+          --cov-report=term-missing
+          --cov-report=xml
+
+      - name: Verify OpenAPI snapshot
+        run: |
+          uv run python -m scripts.export_openapi
+          git diff --exit-code -- web/openapi.json
+
+      - name: Verify generated TypeScript SDK
+        run: uv run python -m scripts.generate_typescript_sdk --check
+
+      - name: Verify generated Python SDK
+        run: uv run python -m scripts.generate_python_sdk --check
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-python-3.13
+          path: coverage.xml
+
+  postgres-integration:
+    name: PostgreSQL 17 integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: parser_serve_test
+          POSTGRES_USER: parser_serve
+          POSTGRES_PASSWORD: parser_serve_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U parser_serve -d parser_serve_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      PARSER_SERVE_DATABASE_URL: postgresql+asyncpg://parser_serve:parser_serve_test@127.0.0.1:5432/parser_serve_test
+      PARSER_SERVE_TEST_POSTGRES_URL: postgresql+asyncpg://parser_serve:parser_serve_test@127.0.0.1:5432/parser_serve_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      - name: Sync locked dependencies
+        run: uv sync --frozen --python 3.13 --extra control-plane
+
+      - name: Upgrade PostgreSQL schema
+        run: uv run alembic upgrade head
+
+      - name: Verify PostgreSQL schema and SKIP LOCKED leasing
+        run: uv run pytest -q tests/test_postgres_integration.py
+
+  typescript-sdk:
+    name: TypeScript SDK contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Type-check dependency-free generated SDK
+        run: |
+          npx --yes --package typescript@5.9.3 tsc -p web/tsconfig.sdk.json
+          npx --yes --package typescript@5.9.3 tsc -p web/tsconfig.client.json

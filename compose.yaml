@@ -1,0 +1,326 @@
+name: parser-serve
+
+x-worker-environment: &worker-environment
+  PARSER_WORKER_CONTROL_PLANE_URL: http://control-plane:8000
+  PARSER_WORKER_API_KEY: ${PARSER_WORKER_API_KEY:-parser_fedcba9876543210fedcba9876543210}
+  PARSER_WORKER_LEASE_WAIT_SECONDS: "20"
+  PARSER_WORKER_REQUEST_TIMEOUT_SECONDS: "60"
+  PARSER_WORKER_ALLOWED_S3_BUCKETS: '["parser-serve"]'
+  PARSER_WORKER_S3_ENDPOINT_URL: http://minio:9000
+  PARSER_WORKER_S3_REGION_NAME: us-east-1
+  PARSER_WORKER_MAXIMUM_PDF_PAGES: ${MAXIMUM_PDF_PAGES:-1000}
+  PARSER_WORKER_MAXIMUM_IMAGE_PIXELS: ${MAXIMUM_IMAGE_PIXELS:-100000000}
+  PARSER_WORKER_MAXIMUM_MEDIA_DURATION_SECONDS: ${MAXIMUM_MEDIA_DURATION_SECONDS:-14400}
+  AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-parser_serve}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-parser_serve_dev_password}
+  AWS_DEFAULT_REGION: us-east-1
+
+x-worker-depends-on: &worker-depends-on
+  control-plane:
+    condition: service_healthy
+  minio-init:
+    condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: parser_serve
+      POSTGRES_USER: parser_serve
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-parser_serve_dev_password}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U parser_serve -d parser_serve"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [parser-internal]
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-bookworm
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - redis-data:/data
+    networks: [parser-internal]
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-parser_serve}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-parser_serve_dev_password}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    networks: [parser-internal, parser-public]
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-parser_serve}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-parser_serve_dev_password}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb --ignore-existing local/parser-serve
+    networks: [parser-internal]
+    restart: "no"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/control-plane.Dockerfile
+    environment:
+      PARSER_SERVE_DATABASE_URL: postgresql+asyncpg://parser_serve:${POSTGRES_PASSWORD:-parser_serve_dev_password}@postgres/parser_serve
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [parser-internal]
+    restart: "no"
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: docker/control-plane.Dockerfile
+      args:
+        BUILD_COMMIT: ${BUILD_COMMIT:-}
+        BUILD_TIME: ${BUILD_TIME:-}
+    environment:
+      PARSER_SERVE_ENVIRONMENT: development
+      PARSER_SERVE_API_KEYS: '["${PARSER_SERVE_API_KEY:-parser_0123456789abcdef0123456789abcdef}"]'
+      PARSER_SERVE_WORKER_API_KEYS: '["${PARSER_WORKER_API_KEY:-parser_fedcba9876543210fedcba9876543210}"]'
+      PARSER_SERVE_DATABASE_URL: postgresql+asyncpg://parser_serve:${POSTGRES_PASSWORD:-parser_serve_dev_password}@postgres/parser_serve
+      PARSER_SERVE_STORAGE_BACKEND: s3
+      PARSER_SERVE_S3_STORAGE_BUCKET: parser-serve
+      PARSER_SERVE_S3_STORAGE_ENDPOINT_URL: http://minio:9000
+      PARSER_SERVE_S3_STORAGE_REGION_NAME: us-east-1
+      PARSER_SERVE_TASK_QUEUE_BACKEND: redis_streams
+      PARSER_SERVE_REDIS_URL: redis://redis:6379/0
+      PARSER_SERVE_CALLBACK_DISPATCHER_ENABLED: "true"
+      PARSER_SERVE_UPLOADED_FILE_RETENTION_SECONDS: ${UPLOADED_FILE_RETENTION_SECONDS:-86400}
+      PARSER_SERVE_ARTIFACT_RETENTION_SECONDS: ${ARTIFACT_RETENTION_SECONDS:-2592000}
+      PARSER_SERVE_EVENT_RETENTION_SECONDS: ${EVENT_RETENTION_SECONDS:-604800}
+      PARSER_SERVE_SSE_MAXIMUM_SEND_DELAY_SECONDS: ${SSE_MAXIMUM_SEND_DELAY_SECONDS:-30}
+      PARSER_SERVE_SCHEDULER_MAXIMUM_DEVICE_MEMORY_UTILIZATION_PERCENT: ${SCHEDULER_MAXIMUM_DEVICE_MEMORY_UTILIZATION_PERCENT:-95}
+      PARSER_SERVE_RETENTION_CLEANUP_INTERVAL_SECONDS: ${RETENTION_CLEANUP_INTERVAL_SECONDS:-300}
+      PARSER_SERVE_RETENTION_CLEANUP_BATCH_SIZE: ${RETENTION_CLEANUP_BATCH_SIZE:-500}
+      PARSER_SERVE_LOG_FORMAT: json
+      PARSER_SERVE_METRICS_ENABLED: "true"
+      PARSER_SERVE_CORS_ALLOWED_ORIGINS: '["http://localhost:${PARSER_WEB_PORT:-8080}"]'
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-parser_serve}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-parser_serve_dev_password}
+      AWS_DEFAULT_REGION: us-east-1
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    ports:
+      - "${PARSER_API_PORT:-8000}:8000"
+    networks: [parser-internal, parser-public]
+    restart: unless-stopped
+
+  catalog-init:
+    build:
+      context: .
+      dockerfile: docker/control-plane.Dockerfile
+    environment:
+      PARSER_SERVE_API_KEY: ${PARSER_SERVE_API_KEY:-parser_0123456789abcdef0123456789abcdef}
+    command:
+      - python
+      - -c
+      - |
+        import os
+        import httpx
+        response = httpx.post(
+            "http://control-plane:8000/api/v1/management/defaults/initialize",
+            headers={"Authorization": f"Bearer {os.environ['PARSER_SERVE_API_KEY']}"},
+            json={
+                "include_builtin_backends": True,
+                "publish_valid_pipelines": True,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    networks: [parser-internal]
+    restart: "no"
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    ports:
+      - "${PARSER_WEB_PORT:-8080}:8080"
+    networks: [parser-internal, parser-public]
+    restart: unless-stopped
+
+  worker-cpu:
+    build:
+      context: .
+      dockerfile: docker/worker-cpu.Dockerfile
+    environment:
+      <<: *worker-environment
+      PARSER_WORKER_WORKER_ID: worker_cpucompose
+      PARSER_WORKER_NAME: Compose CPU Worker
+      PARSER_WORKER_MAXIMUM_CONCURRENCY: ${CPU_WORKER_CONCURRENCY:-2}
+    depends_on: *worker-depends-on
+    networks: [parser-internal, parser-public]
+    restart: unless-stopped
+
+  worker-cuda:
+    profiles: [cuda]
+    build:
+      context: .
+      dockerfile: docker/worker-cuda.Dockerfile
+      args:
+        CUDA_BASE_IMAGE: ${CUDA_BASE_IMAGE:-}
+    environment:
+      <<: *worker-environment
+      PARSER_WORKER_WORKER_ID: worker_cudacompose
+      PARSER_WORKER_NAME: Compose CUDA Worker
+      PARSER_WORKER_ENGINE_BACKENDS: ${CUDA_ENGINE_BACKENDS:-[]}
+      PARSER_WORKER_PRELOAD_BACKENDS: ${CUDA_PRELOAD_BACKENDS:-[]}
+    depends_on: *worker-depends-on
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks: [parser-internal, parser-public]
+    restart: unless-stopped
+
+  worker-ascend:
+    profiles: [ascend]
+    build:
+      context: .
+      dockerfile: docker/worker-ascend.Dockerfile
+      args:
+        ASCEND_BASE_IMAGE: ${ASCEND_BASE_IMAGE:-}
+    environment:
+      <<: *worker-environment
+      PARSER_WORKER_WORKER_ID: worker_ascendcompose
+      PARSER_WORKER_NAME: Compose Ascend Worker
+      PARSER_WORKER_DEVICE_PROBE_COMMAND: ${ASCEND_DEVICE_PROBE_COMMAND:-[]}
+      PARSER_WORKER_ENGINE_BACKENDS: ${ASCEND_ENGINE_BACKENDS:-[]}
+    depends_on: *worker-depends-on
+    networks: [parser-internal, parser-public]
+    restart: unless-stopped
+
+  worker-mlu:
+    profiles: [mlu]
+    build:
+      context: .
+      dockerfile: docker/worker-mlu.Dockerfile
+      args:
+        MLU_BASE_IMAGE: ${MLU_BASE_IMAGE:-}
+    environment:
+      <<: *worker-environment
+      PARSER_WORKER_WORKER_ID: worker_mlucompose
+      PARSER_WORKER_NAME: Compose MLU Worker
+      PARSER_WORKER_DEVICE_PROBE_COMMAND: ${MLU_DEVICE_PROBE_COMMAND:-[]}
+      PARSER_WORKER_ENGINE_BACKENDS: ${MLU_ENGINE_BACKENDS:-[]}
+    depends_on: *worker-depends-on
+    networks: [parser-internal, parser-public]
+    restart: unless-stopped
+
+  worker-dcu:
+    profiles: [dcu]
+    build:
+      context: .
+      dockerfile: docker/worker-dcu.Dockerfile
+      args:
+        DCU_BASE_IMAGE: ${DCU_BASE_IMAGE:-}
+    environment:
+      <<: *worker-environment
+      PARSER_WORKER_WORKER_ID: worker_dcucompose
+      PARSER_WORKER_NAME: Compose DCU Worker
+      PARSER_WORKER_DEVICE_PROBE_COMMAND: ${DCU_DEVICE_PROBE_COMMAND:-[]}
+      PARSER_WORKER_ENGINE_BACKENDS: ${DCU_ENGINE_BACKENDS:-[]}
+    depends_on: *worker-depends-on
+    networks: [parser-internal, parser-public]
+    restart: unless-stopped
+
+  worker-musa:
+    profiles: [musa]
+    build:
+      context: .
+      dockerfile: docker/worker-musa.Dockerfile
+      args:
+        MUSA_BASE_IMAGE: ${MUSA_BASE_IMAGE:-}
+    environment:
+      <<: *worker-environment
+      PARSER_WORKER_WORKER_ID: worker_musacompose
+      PARSER_WORKER_NAME: Compose MUSA Worker
+      PARSER_WORKER_DEVICE_PROBE_COMMAND: ${MUSA_DEVICE_PROBE_COMMAND:-[]}
+      PARSER_WORKER_ENGINE_BACKENDS: ${MUSA_ENGINE_BACKENDS:-[]}
+    depends_on: *worker-depends-on
+    networks: [parser-internal, parser-public]
+    restart: unless-stopped
+
+  worker-xpu:
+    profiles: [xpu]
+    build:
+      context: .
+      dockerfile: docker/worker-xpu.Dockerfile
+      args:
+        XPU_BASE_IMAGE: ${XPU_BASE_IMAGE:-}
+    environment:
+      <<: *worker-environment
+      PARSER_WORKER_WORKER_ID: worker_xpucompose
+      PARSER_WORKER_NAME: Compose XPU Worker
+      PARSER_WORKER_DEVICE_PROBE_COMMAND: ${XPU_DEVICE_PROBE_COMMAND:-[]}
+      PARSER_WORKER_ENGINE_BACKENDS: ${XPU_ENGINE_BACKENDS:-[]}
+    depends_on: *worker-depends-on
+    networks: [parser-internal, parser-public]
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+
+networks:
+  parser-internal:
+    internal: true
+  parser-public:
