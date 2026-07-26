@@ -65,6 +65,8 @@ class StageDetail(StrictSchema):
     worker_id: WorkerId | None = None
     runtime: DeviceRuntime | None = None
     device_id: NonEmptyStr | None = None
+    completion_worker_id: WorkerId | None = None
+    completion_device_id: NonEmptyStr | None = None
     required_runtimes: list[DeviceRuntime] = Field(default_factory=list)
     attempt: Annotated[int, Field(ge=0, strict=True)] = 0
     maximum_attempts: Annotated[int, Field(ge=1, strict=True)] = 1
@@ -100,6 +102,8 @@ class StageDetail(StrictSchema):
             raise ValueError("attempt cannot exceed maximum_attempts")
         if self.status is StageStatus.RUNNING and self.started_at is None:
             raise ValueError("running stages require started_at")
+        if self.completion_device_id is not None and self.completion_worker_id is None:
+            raise ValueError("completion_device_id requires completion_worker_id")
         if self.started_at is not None and self.started_at < self.created_at:
             raise ValueError("started_at cannot be earlier than created_at")
         if (

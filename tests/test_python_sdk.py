@@ -44,6 +44,16 @@ class PythonSdkGenerationTests(unittest.TestCase):
             if method in {"get", "post", "put", "patch", "delete", "options", "head"}
         }
         self.assertEqual(set(OPERATION_SPECS), expected)
+        self.assertTrue(
+            all(
+                hasattr(ParserServeClient, f"call_{operation_id}")
+                and hasattr(AsyncParserServeClient, f"call_{operation_id}")
+                for operation_id in expected
+            )
+        )
+        self.assertIn("class GetTaskPath(TypedDict)", generated)
+        self.assertIn("type GetTaskResponse =", generated)
+        self.assertIn("file: UploadFile", generated)
 
 
 class SyncPythonSdkTests(unittest.TestCase):
@@ -88,6 +98,7 @@ class SyncPythonSdkTests(unittest.TestCase):
             sdk.get_task("missing")
         self.assertEqual(raised.exception.status_code, 404)
         self.assertEqual(raised.exception.code, ErrorCode.NOT_FOUND)
+        self.assertIsInstance(raised.exception.code, ErrorCode)
         self.assertFalse(raised.exception.retryable)
         self.assertEqual(raised.exception.request_id, "req_01J00000000000000000000000")
 
@@ -101,6 +112,43 @@ class SyncPythonSdkTests(unittest.TestCase):
         sdk.close()
         self.assertFalse(http_client.is_closed)
         http_client.close()
+
+    def test_future_error_code_preserves_structured_error_fields(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                503,
+                json={
+                    "request_id": "req_01J00000000000000000000000",
+                    "error": {
+                        "code": "FUTURE_ERROR",
+                        "message": "retry later",
+                        "retryable": True,
+                        "field_violations": [],
+                        "context": {"generation": 2},
+                    },
+                },
+            )
+
+        transport = httpx.MockTransport(handler)
+        with httpx.Client(
+            transport=transport,
+            base_url="https://parser.invalid",
+        ) as http_client:
+            sdk = ParserServeClient(
+                "https://ignored.invalid",
+                API_KEY,
+                client=http_client,
+            )
+            with self.assertRaises(ParserServeApiError) as raised:
+                sdk.get_task("task_futureerror1")
+
+        self.assertEqual(raised.exception.code, "FUTURE_ERROR")
+        self.assertTrue(raised.exception.retryable)
+        self.assertEqual(
+            raised.exception.request_id,
+            "req_01J00000000000000000000000",
+        )
+        self.assertIn("retry later", str(raised.exception))
 
 
 class AsyncPythonSdkAsgiTests(unittest.IsolatedAsyncioTestCase):
@@ -149,6 +197,8 @@ class AsyncPythonSdkAsgiTests(unittest.IsolatedAsyncioTestCase):
         task = await self.sdk.get_task(created.task_id)
         self.assertEqual(task.task_id, created.task_id)
         self.assertEqual(task.client_reference, "python-sdk-test")
+        wire_task = await self.sdk.call_get_task(path={"task_id": created.task_id})
+        self.assertEqual(wire_task["data"]["task_id"], created.task_id)
 
         listed = await self.sdk.list_tasks(
             TaskListQuery(statuses=[task.status], limit=10)
@@ -160,6 +210,10 @@ class AsyncPythonSdkAsgiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(uploaded.filename, "sdk.txt")
         self.assertEqual(uploaded.size_bytes, len(b"SDK uploaded content"))
+        wire_uploaded = await self.sdk.call_upload_file(
+            body={"file": ("typed.txt", b"typed upload", "text/plain")}
+        )
+        self.assertEqual(wire_uploaded["data"]["filename"], "typed.txt")
 
         with self.assertRaises(ParserServeApiError) as raised:
             await self.sdk.get_task("task_00000000missing")

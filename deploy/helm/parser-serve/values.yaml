@@ -1,0 +1,130 @@
+nameOverride: ""
+fullnameOverride: ""
+existingSecret: parser-serve-secrets
+
+controlPlane:
+  replicas: 2
+  image:
+    repository: parser-control-plane
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  resources: {}
+
+web:
+  replicas: 2
+  image:
+    repository: parser-web
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  resources: {}
+
+config:
+  redisUrl: redis://redis:6379/0
+  s3EndpointUrl: http://minio:9000
+  s3Bucket: parser-serve
+  s3Region: us-east-1
+
+telemetry:
+  enabled: false
+  endpoint: ""
+
+workerDefaults:
+  replicas: 1
+  maximumConcurrency: 1
+  terminationGracePeriodSeconds: 120
+  engineBackends: []
+  preloadBackends: []
+  subprocessResourceLimitsRequired: true
+  subprocessMaximumMemoryBytes: 8589934592
+
+workers:
+  cpu:
+    enabled: true
+    runtime: cpu
+    image: {repository: parser-worker-cpu, tag: "0.1.0", pullPolicy: IfNotPresent}
+    nodeSelector: {parser-serve/runtime: cpu}
+    resources: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "4", memory: 8Gi}}
+    engineBackends: []
+  cuda:
+    enabled: false
+    runtime: cuda
+    image: {repository: parser-worker-cuda, tag: "0.1.0", pullPolicy: IfNotPresent}
+    nodeSelector: {parser-serve/runtime: cuda}
+    resources:
+      requests: {nvidia.com/gpu: "1"}
+      limits: {nvidia.com/gpu: "1"}
+    engineBackends: []
+  ascend:
+    enabled: false
+    runtime: ascend
+    image: {repository: parser-worker-ascend, tag: "0.1.0", pullPolicy: IfNotPresent}
+    nodeSelector: {parser-serve/runtime: ascend}
+    resources:
+      requests: {huawei.com/Ascend910: "1"}
+      limits: {huawei.com/Ascend910: "1"}
+    engineBackends: []
+  mlu:
+    enabled: false
+    runtime: mlu
+    image: {repository: parser-worker-mlu, tag: "0.1.0", pullPolicy: IfNotPresent}
+    nodeSelector: {parser-serve/runtime: mlu}
+    resources:
+      requests: {cambricon.com/mlu: "1"}
+      limits: {cambricon.com/mlu: "1"}
+    engineBackends: []
+  dcu:
+    enabled: false
+    runtime: dcu
+    image: {repository: parser-worker-dcu, tag: "0.1.0", pullPolicy: IfNotPresent}
+    nodeSelector: {parser-serve/runtime: dcu}
+    resources:
+      requests: {hygon.com/dcu: "1"}
+      limits: {hygon.com/dcu: "1"}
+    engineBackends: []
+  musa:
+    enabled: false
+    runtime: musa
+    image: {repository: parser-worker-musa, tag: "0.1.0", pullPolicy: IfNotPresent}
+    nodeSelector: {parser-serve/runtime: musa}
+    resources:
+      requests: {mthreads.com/vgpu: "1"}
+      limits: {mthreads.com/vgpu: "1"}
+    engineBackends: []
+  xpu:
+    enabled: false
+    runtime: xpu
+    image: {repository: parser-worker-xpu, tag: "0.1.0", pullPolicy: IfNotPresent}
+    nodeSelector: {parser-serve/runtime: xpu}
+    resources:
+      requests: {kunlunxin.com/xpu: "1"}
+      limits: {kunlunxin.com/xpu: "1"}
+    engineBackends: []
+
+networkPolicy:
+  enabled: false
+  controlPlane:
+    restrictEgress: false
+    allowPublicEgress: true
+    additionalIngress: []
+    additionalEgress: []
+  worker:
+    allowPublicEgress: true
+    additionalEgress: []
+  web:
+    additionalIngress: []
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+    labels: {}
+    authorization:
+      existingSecret: parser-serve-monitoring
+      key: api-key
+  prometheusRule:
+    enabled: false
+    labels: {}
+    pendingTasksWarning: 100
+    retryWaitStagesWarning: 50
+    callbackFailuresWarning: 1
+    httpServerErrorRatioWarning: 0.05
+    workerSaturationRatioWarning: 0.9

@@ -39,9 +39,9 @@ Collector。官方实现依据
 和
 [HTTPX Instrumentation](https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation/httpx/httpx.html)。
 
-Parser Serve 当前提供 JSON 结构化日志、Prometheus 指标、类型化管理看板，
-以及可选的 Prometheus Operator 抓取与基础告警规则。OpenTelemetry Trace
-仍属于后续工作。
+Parser Serve 当前提供 JSON 结构化日志、Prometheus 指标、类型化管理看板、
+可选的 Prometheus Operator 抓取与基础告警规则，以及本节所述的可选
+OpenTelemetry Trace。
 
 ## 日志
 

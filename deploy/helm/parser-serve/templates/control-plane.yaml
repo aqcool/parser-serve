@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "parser-serve.fullname" . }}-control-plane
+  labels:
+    {{- include "parser-serve.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  replicas: {{ .Values.controlPlane.replicas }}
+  strategy:
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: control-plane
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: control-plane
+    spec:
+      containers:
+        - name: control-plane
+          image: "{{ .Values.controlPlane.image.repository }}:{{ .Values.controlPlane.image.tag }}"
+          imagePullPolicy: {{ .Values.controlPlane.image.pullPolicy }}
+          ports: [{name: http, containerPort: 8000}]
+          env:
+            - {name: PARSER_SERVE_ENVIRONMENT, value: production}
+            - {name: PARSER_SERVE_TASK_QUEUE_BACKEND, value: redis_streams}
+            - {name: PARSER_SERVE_REDIS_URL, value: {{ .Values.config.redisUrl | quote }}}
+            - {name: PARSER_SERVE_STORAGE_BACKEND, value: s3}
+            - {name: PARSER_SERVE_S3_STORAGE_BUCKET, value: {{ .Values.config.s3Bucket | quote }}}
+            - {name: PARSER_SERVE_S3_STORAGE_ENDPOINT_URL, value: {{ .Values.config.s3EndpointUrl | quote }}}
+            - name: PARSER_SERVE_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: database-url}}
+            - name: PARSER_SERVE_API_KEYS
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: api-key-list}}
+            - name: PARSER_SERVE_WORKER_API_KEYS
+              valueFrom: {secretKeyRef: {name: {{ .Values.existingSecret }}, key: worker-api-key-list}}
+          readinessProbe: {httpGet: {path: /ready, port: http}}
+          livenessProbe: {httpGet: {path: /health, port: http}}
+          resources: {{- toYaml .Values.controlPlane.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "parser-serve.fullname" . }}-control-plane
+  labels:
+    {{- include "parser-serve.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control-plane
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: control-plane
+  ports: [{name: http, port: 8000, targetPort: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "parser-serve.fullname" . }}-web
+spec:
+  replicas: {{ .Values.web.replicas }}
+  strategy:
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: web
+    spec:
+      containers:
+        - name: web
+          image: "{{ .Values.web.image.repository }}:{{ .Values.web.image.tag }}"
+          ports: [{name: http, containerPort: 8080}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "parser-serve.fullname" . }}-web
+spec:
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: web
+  ports: [{name: http, port: 80, targetPort: http}]

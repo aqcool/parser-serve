@@ -83,12 +83,19 @@ Ray 集群。
 Ingress 原生实现 [Remote Backend 1.0](remote-backends.md) multipart 协议：
 
 - 请求 JSON 在调用模型前由 `RemoteParseRequest` 校验；
-- 文件采用有界分块读取，并校验声明大小和 SHA-256；
+- multipart 请求体在解析前采用有界分块读取，并提前检查 `Content-Length`；
+- 文件再次执行独立大小限制，并校验协议声明大小和 SHA-256；
 - Handler 响应由判别联合 Schema 校验；
 - 校验 Task ID 和不可变 SourceMetadata；
 - 超时映射为可重试 `TIMEOUT`，内部异常不返回 traceback 或模型密钥；
 - 可选 Bearer Token 使用常量时间比较；
 - Worker 传来的 `runtime` 和 `device_id` 保留给 Handler。
+- Ingress 从 HTTP `traceparent` 接续 Worker Span；Header 缺失时回退到协议中
+  持久化的 Trace Context，并为 Handler 创建 `parser.remote.execute` Span。
+
+应用层请求体上限包含 `maximum_file_bytes`、最多 1 MiB 的协议 JSON 和少量
+multipart framing 余量。生产入口仍必须在 Ingress、Gateway 或 Service Mesh
+配置同量级的请求体上限，使超限流量在到达 Ray Replica 前被拒绝。
 
 `max_ongoing_requests` 控制每 Replica 并发，`max_queued_requests` 提供负载
 丢弃边界，Worker 自身 Backend 信号量和 Stage 超时仍同时生效。对于跨多机

@@ -171,6 +171,8 @@ def _stage_detail(record: StageRecord) -> StageDetail:
         worker_id=record.worker_id,
         runtime=DeviceRuntime(record.runtime) if record.runtime is not None else None,
         device_id=record.device_id,
+        completion_worker_id=record.completion_worker_id,
+        completion_device_id=record.completion_device_id,
         required_runtimes=[
             DeviceRuntime(str(item)) for item in record.required_runtimes_payload
         ],
@@ -434,6 +436,7 @@ class TaskRepository:
                 stage.lease_token_digest = None
                 stage.lease_expires_at = None
                 stage.completion_worker_id = None
+                stage.completion_device_id = None
                 stage.completion_lease_token_digest = None
                 stage.completion_request_digest = None
         self._status_event(
@@ -477,6 +480,7 @@ class TaskRepository:
                 stage.lease_token_digest = None
                 stage.lease_expires_at = None
                 stage.completion_worker_id = None
+                stage.completion_device_id = None
                 stage.completion_lease_token_digest = None
                 stage.completion_request_digest = None
                 stage.error_payload = None

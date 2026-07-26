@@ -6,7 +6,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from parser_serve.observability import (
     capture_trace_context,
@@ -33,7 +33,7 @@ class TraceContextTests(unittest.TestCase):
             Settings(otel_enabled=True)
         with self.assertRaisesRegex(ValidationError, "otel_exporter_endpoint"):
             WorkerSettings(
-                api_key=f"parser_{'o' * 32}",
+                api_key=SecretStr(f"parser_{'o' * 32}"),
                 worker_id="worker_tracing12",
                 otel_enabled=True,
             )
@@ -71,12 +71,24 @@ class OpenTelemetryIntegrationTests(unittest.TestCase):
             root = spans["parser.api.create_task"]
             stage = spans["parser.stage.execute"]
             callback = spans["parser.callback.deliver"]
-            self.assertEqual(stage.context.trace_id, root.context.trace_id)
-            self.assertEqual(callback.context.trace_id, root.context.trace_id)
-            self.assertEqual(stage.parent.span_id, root.context.span_id)
-            self.assertEqual(callback.parent.span_id, root.context.span_id)
+            root_context = root.context
+            stage_context = stage.context
+            callback_context = callback.context
+            stage_parent = stage.parent
+            callback_parent = callback.parent
+            attributes = stage.attributes
+            assert root_context is not None
+            assert stage_context is not None
+            assert callback_context is not None
+            assert stage_parent is not None
+            assert callback_parent is not None
+            assert attributes is not None
+            self.assertEqual(stage_context.trace_id, root_context.trace_id)
+            self.assertEqual(callback_context.trace_id, root_context.trace_id)
+            self.assertEqual(stage_parent.span_id, root_context.span_id)
+            self.assertEqual(callback_parent.span_id, root_context.span_id)
             self.assertEqual(
-                stage.attributes["parser.stage.id"],
+                attributes["parser.stage.id"],
                 "stage_trace123",
             )
         finally:

@@ -1,0 +1,54 @@
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "parser-serve.fullname" . }}
+  labels:
+    {{- toYaml .Values.monitoring.serviceMonitor.labels | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: control-plane
+  endpoints:
+    - port: http
+      path: /metrics
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .Values.monitoring.serviceMonitor.authorization.existingSecret }}
+          key: {{ .Values.monitoring.serviceMonitor.authorization.key }}
+{{- end }}
+{{- if .Values.monitoring.prometheusRule.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "parser-serve.fullname" . }}
+  labels:
+    {{- toYaml .Values.monitoring.prometheusRule.labels | nindent 4 }}
+spec:
+  groups:
+    - name: parser-serve
+      rules:
+        - alert: ParserServeControlPlaneDown
+          expr: up{job=~".*parser-serve.*"} == 0
+          for: 5m
+        - alert: ParserServeNoOnlineWorkers
+          expr: max(parser_worker_records{status="online"}) < 1
+          for: 5m
+        - alert: ParserServeHighServerErrorRatio
+          expr: sum(rate(parser_http_requests_total{status_code=~"5.."}[5m])) / clamp_min(sum(rate(parser_http_requests_total[5m])), 1) > {{ .Values.monitoring.prometheusRule.httpServerErrorRatioWarning }}
+          for: 10m
+        - alert: ParserServePendingTaskBacklog
+          expr: max(parser_task_records{status="pending"}) > {{ .Values.monitoring.prometheusRule.pendingTasksWarning }}
+          for: 10m
+        - alert: ParserServeRetryWaitStageBacklog
+          expr: max(parser_stage_records{status="retry_wait"}) > {{ .Values.monitoring.prometheusRule.retryWaitStagesWarning }}
+          for: 10m
+        - alert: ParserServeWorkerSaturation
+          expr: max(parser_worker_concurrency{kind="used"} / clamp_min(parser_worker_concurrency{kind="maximum"}, 1)) > {{ .Values.monitoring.prometheusRule.workerSaturationRatioWarning }}
+          for: 15m
+        - alert: ParserServeCallbackFailures
+          expr: max(parser_callback_deliveries{status="failed"}) > {{ .Values.monitoring.prometheusRule.callbackFailuresWarning }}
+          for: 15m
+{{- end }}

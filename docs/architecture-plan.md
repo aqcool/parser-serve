@@ -321,6 +321,8 @@ OpenAPI 生成稳定 operationId 到 HTTP 方法、路径的映射；同步和�
 预加载指定模型，失败时逆序回滚，Drain 完成后逆序卸载。控制面为每个 Stage
 租约绑定具体 `device_id`；多设备 Worker 按活动租约数、实时利用率、显存压力
 和稳定设备 ID 排序，Backend 从租约上下文绑定实际执行设备。
+`StageDetail.worker_id/device_id` 表示当前活动租约；完成时另外持久化并公开
+`completion_worker_id/completion_device_id`，供看板、审计和故障定位长期查询。
 
 OpenTelemetry 作为可选 Profile 使用 OTLP/HTTP 导出。FastAPI 与 HTTPX 负责
 HTTP 边界自动传播；Task 创建时持久化严格 W3C Trace Context，Stage 租约和

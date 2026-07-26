@@ -139,6 +139,7 @@ class HttpCallbackTransport:
         self.client = client or httpx.AsyncClient(
             follow_redirects=False,
             timeout=httpx.Timeout(timeout_seconds),
+            trust_env=False,
         )
 
     async def aclose(self) -> None:

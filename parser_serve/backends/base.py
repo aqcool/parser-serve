@@ -126,13 +126,27 @@ class BackendRegistry:
                     await backend.load()
                     self._loaded.append(key)
                     loaded_now.append(key)
-            except Exception as exc:
-                for key in reversed(loaded_now):
-                    backend = self._backends[key]
-                    assert isinstance(backend, ManagedBackend)
-                    with contextlib.suppress(Exception):
-                        await backend.unload()
-                    self._loaded.remove(key)
+            except BaseException as exc:
+
+                async def rollback() -> None:
+                    for key in reversed(loaded_now):
+                        backend = self._backends[key]
+                        assert isinstance(backend, ManagedBackend)
+                        with contextlib.suppress(Exception):
+                            await backend.unload()
+                        self._loaded.remove(key)
+
+                rollback_task = asyncio.create_task(rollback())
+                try:
+                    await asyncio.shield(rollback_task)
+                except asyncio.CancelledError:
+                    # A second cancellation must not leave a partially loaded batch.
+                    await rollback_task
+                    raise
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                if not isinstance(exc, Exception):
+                    raise
                 if isinstance(exc, BackendExecutionError):
                     raise
                 raise BackendExecutionError(

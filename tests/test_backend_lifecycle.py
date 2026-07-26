@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 
 from parser_serve.backends import (
@@ -85,6 +86,26 @@ class BackendLifecycleTests(unittest.IsolatedAsyncioTestCase):
         registry.register(LifecycleBackend("model_b", events, fail_load=True))
 
         with self.assertRaisesRegex(BackendExecutionError, "model preload failed"):
+            await registry.preload([target("model_a"), target("model_b")])
+
+        self.assertEqual(
+            events,
+            ["load:model_a", "load:model_b", "unload:model_a"],
+        )
+        self.assertEqual(registry.loaded_backends, ())
+
+    async def test_cancelled_batch_rolls_back_models_loaded_by_that_batch(self) -> None:
+        class CancelledBackend(LifecycleBackend):
+            async def load(self) -> None:
+                self.events.append(f"load:{self.capability.name}")
+                raise asyncio.CancelledError
+
+        events: list[str] = []
+        registry = BackendRegistry()
+        registry.register(LifecycleBackend("model_a", events))
+        registry.register(CancelledBackend("model_b", events))
+
+        with self.assertRaises(asyncio.CancelledError):
             await registry.preload([target("model_a"), target("model_b")])
 
         self.assertEqual(

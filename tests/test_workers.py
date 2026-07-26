@@ -355,6 +355,13 @@ class WorkerAndSchedulerTests(unittest.IsolatedAsyncioTestCase):
                 task_detail(task).result_uri,
                 "s3://results/result.json",
             )
+            completed = {stage.name: stage for stage in task_detail(task).stages}[
+                "normalize"
+            ]
+            self.assertIsNone(completed.worker_id)
+            self.assertIsNone(completed.device_id)
+            self.assertEqual(completed.completion_worker_id, WORKER_ID)
+            self.assertEqual(completed.completion_device_id, "cpu-0")
 
     async def test_invalid_token_is_rejected(self) -> None:
         await self.prepare_routed_task()

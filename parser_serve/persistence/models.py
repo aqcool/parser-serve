@@ -275,6 +275,10 @@ class StageRecord(TimestampMixin, Base):
         String(72),
         nullable=True,
     )
+    completion_device_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
     completion_lease_token_digest: Mapped[bytes | None] = mapped_column(
         LargeBinary(32),
         nullable=True,

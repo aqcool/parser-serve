@@ -1,0 +1,67 @@
+{{- range $runtime, $worker := .Values.workers }}
+{{- if $worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "parser-serve.fullname" $ }}-worker-{{ $runtime }}
+  labels:
+    {{- include "parser-serve.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: worker
+    parser-serve/runtime: {{ $runtime }}
+spec:
+  replicas: {{ $.Values.workerDefaults.replicas }}
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: worker
+      parser-serve/runtime: {{ $runtime }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        app.kubernetes.io/component: worker
+        parser-serve/runtime: {{ $runtime }}
+    spec:
+      terminationGracePeriodSeconds: {{ $.Values.workerDefaults.terminationGracePeriodSeconds }}
+      nodeSelector:
+        {{- toYaml $worker.nodeSelector | nindent 8 }}
+      containers:
+        - name: worker
+          image: "{{ $worker.image.repository }}:{{ $worker.image.tag }}"
+          imagePullPolicy: {{ $worker.image.pullPolicy }}
+          env:
+            - name: PARSER_WORKER_CONTROL_PLANE_URL
+              value: http://{{ include "parser-serve.fullname" $ }}-control-plane:8000
+            - name: PARSER_WORKER_DEVICE_RUNTIME
+              value: {{ $worker.runtime | quote }}
+            - name: PARSER_WORKER_ENGINE_BACKENDS
+              value: {{ default $.Values.workerDefaults.engineBackends $worker.engineBackends | toJson | quote }}
+            - name: PARSER_WORKER_PRELOAD_BACKENDS
+              value: {{ $.Values.workerDefaults.preloadBackends | toJson | quote }}
+            - name: PARSER_WORKER_SUBPROCESS_RESOURCE_LIMITS_REQUIRED
+              value: {{ $.Values.workerDefaults.subprocessResourceLimitsRequired | quote }}
+            - name: PARSER_WORKER_SUBPROCESS_MAXIMUM_MEMORY_BYTES
+              value: {{ $.Values.workerDefaults.subprocessMaximumMemoryBytes | quote }}
+            - name: PARSER_WORKER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.existingSecret }}
+                  key: worker-api-key
+          resources:
+            {{- toYaml $worker.resources | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "kill -TERM 1; sleep 5"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: {drop: ["ALL"]}
+---
+{{- end }}
+{{- end }}

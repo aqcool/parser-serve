@@ -1,0 +1,60 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "parser-serve.fullname" . }}-worker
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: worker}}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector: {matchLabels: {app.kubernetes.io/component: control-plane}}
+      ports: [{protocol: TCP, port: 8000}]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: &ipv4Except [10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16]
+        - ipBlock:
+            cidr: "::/0"
+            except: &ipv6Except ["::1/128", "fc00::/7", "fe80::/10"]
+    {{- with .Values.networkPolicy.worker.additionalEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "parser-serve.fullname" . }}-control-plane
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: control-plane}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {matchExpressions: [{key: app.kubernetes.io/component, operator: In, values: [web, worker]}]}
+      ports: [{protocol: TCP, port: 8000}]
+    {{- with .Values.networkPolicy.controlPlane.additionalIngress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  egress:
+    # additionalEgress is mandatory when private PostgreSQL, Redis, S3 or OTLP is used.
+    {{- with .Values.networkPolicy.controlPlane.additionalEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- else }}
+    []
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "parser-serve.fullname" . }}-web
+spec:
+  podSelector: {matchLabels: {app.kubernetes.io/component: web}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - {}
+  egress:
+    - to:
+        - podSelector: {matchLabels: {app.kubernetes.io/component: control-plane}}
+      ports: [{protocol: TCP, port: 8000}]
+{{- end }}

@@ -180,6 +180,7 @@ class RemoteHttpBackend:
         client_arguments: dict[str, Any] = {
             "follow_redirects": False,
             "timeout": timeout,
+            "trust_env": False,
         }
         if self.transport is not None:
             client_arguments["transport"] = self.transport

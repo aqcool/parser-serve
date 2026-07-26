@@ -4,6 +4,8 @@ from .client import (
     AsyncParserServeClient,
     ParserServeApiError,
     ParserServeClient,
+    SdkErrorDetail,
+    SdkErrorResponse,
 )
 from .generated import OPERATION_SPECS, OperationId, OperationSpec
 
@@ -14,4 +16,6 @@ __all__ = [
     "OperationSpec",
     "ParserServeApiError",
     "ParserServeClient",
+    "SdkErrorDetail",
+    "SdkErrorResponse",
 ]

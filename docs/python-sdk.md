@@ -62,27 +62,33 @@ Client 会在上下文退出时关闭。
 
 ## 完整 operationId 调用
 
-常用方法提供直接的 Pydantic 返回类型。其余管理、Worker、SSE 和下载接口可
-通过生成的 operationId 使用 `request`、`request_raw` 或 `stream`：
+常用方法提供直接的 Pydantic 返回类型。OpenAPI 中的每个 operation 还会生成
+`call_<operation_id>` 同步和异步方法，以及独立的 Path、Query、Headers、
+Body、Response wire type。管理、Worker、上传、SSE 和下载接口都不需要退回
+无类型调用。例如：
 
 ```python
-from pydantic import TypeAdapter
-
-from parser_serve.schema.backend import BackendListResponse
-
-response = client.request(
-    "list_backends",
-    TypeAdapter(BackendListResponse),
+response = client.call_list_backends(
     query={"statuses": ["enabled"], "limit": 50},
 )
 
-with client.stream(
-    "download_uploaded_file",
+content = client.call_download_uploaded_file(
     path={"file_id": uploaded.file_id},
-) as response:
-    for chunk in response.iter_bytes():
-        consume(chunk)
+)
+
+for chunk in client.call_stream_events(
+    query={"limit": 100},
+    headers={"Last-Event-ID": last_event_id},
+):
+    consume(chunk)
 ```
+
+例如 `call_get_task` 的参数是 `GetTaskPath`、`GetTaskQuery`、
+`GetTaskHeaders` 和 `GetTaskBody`，返回 `GetTaskResponse`。这些类型与方法均由
+OpenAPI 生成；新增接口如果没有同步生成，会在 CI 防漂移检查中失败。
+
+底层 `request`、`request_raw` 和 `stream` 仍然公开，用于需要直接处理 HTTP
+Response 的高级场景。
 
 列表查询中的序列会编码成重复参数，例如
 `statuses=pending&statuses=failed`。路径参数使用 URL 编码；缺少必填路径参数
@@ -90,9 +96,10 @@ with client.stream(
 `Authorization`。
 
 非 2xx 响应抛出 `ParserServeApiError`。当服务端返回规范错误体时，可读取
-`status_code`、`code`、`retryable`、`request_id` 和完整 `detail`。未知或非
-JSON 网关错误仍保留 HTTP 状态，但 `code` 为 `None`，调用方不能把它误判为
-可重试。
+`status_code`、`code`、`retryable`、`request_id` 和完整 `detail`。SDK 对新增
+错误码向前兼容：未知 `code` 以字符串保留，同时继续保留消息、重试标记和
+Request ID。只有未知或非 JSON 网关错误的 `code` 才为 `None`，调用方不能把
+它误判为可重试。
 
 ## 契约更新
 

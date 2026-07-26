@@ -106,6 +106,7 @@ class CallbackHttpEndToEndTests(unittest.IsolatedAsyncioTestCase):
     async def test_manual_redelivery_is_idempotent_at_real_receiver(self) -> None:
         async with IdempotentCallbackReceiver() as receiver:
             self.assertIsNotNone(receiver.url)
+            assert receiver.url is not None
             async with self.database.session_factory() as session:
                 await TaskRepository().create(
                     session,

@@ -756,6 +756,8 @@ export interface components {
       backend_id?: (string) | (null)
       backend_version?: (string) | (null)
       completed_at?: (string) | (null)
+      completion_device_id?: (string) | (null)
+      completion_worker_id?: (string) | (null)
       created_at: string
       depends_on?: Array<string>
       device_id?: (string) | (null)

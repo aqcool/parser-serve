@@ -279,6 +279,7 @@ class StageScheduler:
             stage.attempt += 1
             stage.lease_token_digest = _lease_digest(token)
             stage.completion_worker_id = None
+            stage.completion_device_id = None
             stage.completion_lease_token_digest = None
             stage.completion_request_digest = None
             stage.lease_expires_at = expires_at
@@ -488,6 +489,7 @@ class StageScheduler:
         if StageStatus(stage.status) is not StageStatus.RUNNING:
             raise StageExecutionConflictError
         stage.completion_worker_id = request.worker_id
+        stage.completion_device_id = stage.device_id
         stage.completion_lease_token_digest = lease_digest
         stage.completion_request_digest = request_digest
 

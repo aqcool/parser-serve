@@ -6,15 +6,21 @@ from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from datetime import date, datetime
 from enum import Enum
-from typing import BinaryIO, TypeVar
+from typing import Any, BinaryIO, TypeVar, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import Field, TypeAdapter, ValidationError, field_validator
 
-from ..schema.base import StrictSchema
-from ..schema.common import HealthData, HealthResponse
-from ..schema.error import ErrorCode, ErrorDetail, ErrorResponse
+from ..schema.base import JsonValue, StrictSchema
+from ..schema.common import (
+    HealthData,
+    HealthResponse,
+    NonEmptyStr,
+    RequestId,
+    StrictBool,
+)
+from ..schema.error import ErrorCode, FieldViolation
 from ..schema.file import UploadedFileDetail, UploadedFileResponse
 from ..schema.result import ParseResult, ParseResultResponse
 from ..schema.task import (
@@ -26,7 +32,12 @@ from ..schema.task import (
     TaskListQuery,
     TaskListResponse,
 )
-from .generated import OPERATION_SPECS, OperationId
+from .generated import (
+    OPERATION_SPECS,
+    GeneratedAsyncClientMixin,
+    GeneratedSyncClientMixin,
+    OperationId,
+)
 
 
 ResponseT = TypeVar("ResponseT")
@@ -35,7 +46,33 @@ QueryValue = Scalar | Sequence[Scalar] | None
 UploadContent = bytes | BinaryIO
 UploadFile = tuple[str, UploadContent, str]
 
-_ERROR_ADAPTER = TypeAdapter(ErrorResponse)
+
+class SdkErrorDetail(StrictSchema):
+    """Forward-compatible error payload returned by a newer service."""
+
+    code: ErrorCode | NonEmptyStr
+    message: NonEmptyStr
+    retryable: StrictBool = False
+    field_violations: list[FieldViolation] = Field(default_factory=list)
+    context: dict[str, JsonValue] = Field(default_factory=dict)
+
+    @field_validator("code")
+    @classmethod
+    def normalize_known_code(cls, value: ErrorCode | str) -> ErrorCode | str:
+        if isinstance(value, ErrorCode):
+            return value
+        try:
+            return ErrorCode(value)
+        except ValueError:
+            return value
+
+
+class SdkErrorResponse(StrictSchema):
+    request_id: RequestId
+    error: SdkErrorDetail
+
+
+_ERROR_ADAPTER = TypeAdapter(SdkErrorResponse)
 _HEALTH_ADAPTER = TypeAdapter(HealthResponse)
 _CREATE_TASK_ADAPTER = TypeAdapter(CreateTaskResponse)
 _TASK_DETAIL_ADAPTER = TypeAdapter(TaskDetailResponse)
@@ -51,18 +88,18 @@ class ParserServeApiError(Exception):
         self,
         *,
         status_code: int,
-        response: ErrorResponse | None,
+        response: SdkErrorResponse | None,
         fallback_message: str,
     ) -> None:
         self.status_code = status_code
         self.response = response
-        self.detail: ErrorDetail | None = response.error if response else None
+        self.detail: SdkErrorDetail | None = response.error if response else None
         self.request_id = response.request_id if response else None
         message = self.detail.message if self.detail else fallback_message
         super().__init__(f"Parser Serve returned HTTP {status_code}: {message}")
 
     @property
-    def code(self) -> ErrorCode | None:
+    def code(self) -> ErrorCode | str | None:
         return self.detail.code if self.detail else None
 
     @property
@@ -137,8 +174,54 @@ def _json_body(body: StrictSchema | object | None) -> object | None:
     return body
 
 
+def _generated_values(
+    *,
+    path: object,
+    query: object,
+    headers: object,
+    body: object,
+    body_media_type: str | None,
+) -> tuple[
+    Mapping[str, Scalar] | None,
+    Mapping[str, QueryValue] | StrictSchema | None,
+    Mapping[str, str] | None,
+    object | None,
+    Mapping[str, UploadFile] | None,
+    Mapping[str, str] | None,
+]:
+    multipart = (
+        cast("Mapping[str, object]", body)
+        if body_media_type == "multipart/form-data"
+        else {}
+    )
+    return (
+        cast("Mapping[str, Scalar] | None", path),
+        cast("Mapping[str, QueryValue] | StrictSchema | None", query),
+        cast("Mapping[str, str] | None", headers),
+        None if body_media_type == "multipart/form-data" else body,
+        (
+            {
+                name: cast("UploadFile", value)
+                for name, value in multipart.items()
+                if isinstance(value, tuple) and len(value) == 3
+            }
+            if body_media_type == "multipart/form-data"
+            else None
+        ),
+        (
+            {
+                name: _scalar(value)
+                for name, value in multipart.items()
+                if not (isinstance(value, tuple) and len(value) == 3)
+            }
+            if body_media_type == "multipart/form-data"
+            else None
+        ),
+    )
+
+
 def _api_error(response: httpx.Response) -> ParserServeApiError:
-    parsed: ErrorResponse | None = None
+    parsed: SdkErrorResponse | None = None
     try:
         parsed = _ERROR_ADAPTER.validate_json(response.content)
     except (ValidationError, ValueError):
@@ -150,7 +233,7 @@ def _api_error(response: httpx.Response) -> ParserServeApiError:
     )
 
 
-class ParserServeClient:
+class ParserServeClient(GeneratedSyncClientMixin):
     """Blocking SDK client. It can own or reuse an existing ``httpx.Client``."""
 
     def __init__(
@@ -175,6 +258,139 @@ class ParserServeClient:
     def __exit__(self, *_: object) -> None:
         self.close()
 
+    def _generated_json(
+        self,
+        operation_id: OperationId,
+        *,
+        path: object,
+        query: object,
+        headers: object,
+        body: object,
+        body_media_type: str | None,
+        response_type: object,
+    ) -> object:
+        path_values, query_values, header_values, json_body, files, form = (
+            _generated_values(
+                path=path,
+                query=query,
+                headers=headers,
+                body=body,
+                body_media_type=body_media_type,
+            )
+        )
+        return self.request(
+            operation_id,
+            TypeAdapter(cast(Any, response_type)),
+            path=path_values,
+            query=query_values,
+            headers=header_values,
+            body=json_body,
+            files=files,
+            form=form,
+        )
+
+    def _generated_bytes(
+        self,
+        operation_id: OperationId,
+        *,
+        path: object,
+        query: object,
+        headers: object,
+        body: object,
+        body_media_type: str | None,
+    ) -> bytes:
+        path_values, query_values, header_values, json_body, files, form = (
+            _generated_values(
+                path=path,
+                query=query,
+                headers=headers,
+                body=body,
+                body_media_type=body_media_type,
+            )
+        )
+        return self.request_raw(
+            operation_id,
+            path=path_values,
+            query=query_values,
+            headers=header_values,
+            body=json_body,
+            files=files,
+            form=form,
+        ).content
+
+    def _generated_text(
+        self,
+        operation_id: OperationId,
+        *,
+        path: object,
+        query: object,
+        headers: object,
+        body: object,
+        body_media_type: str | None,
+    ) -> str:
+        path_values, query_values, header_values, json_body, files, form = (
+            _generated_values(
+                path=path,
+                query=query,
+                headers=headers,
+                body=body,
+                body_media_type=body_media_type,
+            )
+        )
+        return self.request_raw(
+            operation_id,
+            path=path_values,
+            query=query_values,
+            headers=header_values,
+            body=json_body,
+            files=files,
+            form=form,
+        ).text
+
+    def _generated_stream(
+        self,
+        operation_id: OperationId,
+        *,
+        path: object,
+        query: object,
+        headers: object,
+        body: object,
+        body_media_type: str | None,
+    ) -> Iterator[bytes]:
+        path_values, query_values, header_values, _, _, _ = _generated_values(
+            path=path,
+            query=query,
+            headers=headers,
+            body=body,
+            body_media_type=body_media_type,
+        )
+        with self.stream(
+            operation_id,
+            path=path_values,
+            query=query_values,
+            headers=header_values,
+        ) as response:
+            yield from response.iter_bytes()
+
+    def _generated_none(
+        self,
+        operation_id: OperationId,
+        *,
+        path: object,
+        query: object,
+        headers: object,
+        body: object,
+        body_media_type: str | None,
+    ) -> None:
+        self._generated_bytes(
+            operation_id,
+            path=path,
+            query=query,
+            headers=headers,
+            body=body,
+            body_media_type=body_media_type,
+        )
+
     def request_raw(
         self,
         operation_id: OperationId,
@@ -184,6 +400,7 @@ class ParserServeClient:
         headers: Mapping[str, str] | None = None,
         body: StrictSchema | object | None = None,
         files: Mapping[str, UploadFile] | None = None,
+        form: Mapping[str, str] | None = None,
     ) -> httpx.Response:
         method, url, params, request_headers = _request_parts(
             operation_id,
@@ -198,6 +415,7 @@ class ParserServeClient:
             params=params,
             headers=request_headers,
             json=_json_body(body) if files is None else None,
+            data=form,
             files=tuple(files.items()) if files is not None else None,
         )
         if not response.is_success:
@@ -214,6 +432,7 @@ class ParserServeClient:
         headers: Mapping[str, str] | None = None,
         body: StrictSchema | object | None = None,
         files: Mapping[str, UploadFile] | None = None,
+        form: Mapping[str, str] | None = None,
     ) -> ResponseT:
         response = self.request_raw(
             operation_id,
@@ -222,6 +441,7 @@ class ParserServeClient:
             headers=headers,
             body=body,
             files=files,
+            form=form,
         )
         adapter = (
             response_type
@@ -298,7 +518,7 @@ class ParserServeClient:
         ).content
 
 
-class AsyncParserServeClient:
+class AsyncParserServeClient(GeneratedAsyncClientMixin):
     """Async SDK client. It can own or reuse an existing ``httpx.AsyncClient``."""
 
     def __init__(
@@ -323,6 +543,144 @@ class AsyncParserServeClient:
     async def __aexit__(self, *_: object) -> None:
         await self.aclose()
 
+    async def _generated_json(
+        self,
+        operation_id: OperationId,
+        *,
+        path: object,
+        query: object,
+        headers: object,
+        body: object,
+        body_media_type: str | None,
+        response_type: object,
+    ) -> object:
+        path_values, query_values, header_values, json_body, files, form = (
+            _generated_values(
+                path=path,
+                query=query,
+                headers=headers,
+                body=body,
+                body_media_type=body_media_type,
+            )
+        )
+        return await self.request(
+            operation_id,
+            TypeAdapter(cast(Any, response_type)),
+            path=path_values,
+            query=query_values,
+            headers=header_values,
+            body=json_body,
+            files=files,
+            form=form,
+        )
+
+    async def _generated_bytes(
+        self,
+        operation_id: OperationId,
+        *,
+        path: object,
+        query: object,
+        headers: object,
+        body: object,
+        body_media_type: str | None,
+    ) -> bytes:
+        path_values, query_values, header_values, json_body, files, form = (
+            _generated_values(
+                path=path,
+                query=query,
+                headers=headers,
+                body=body,
+                body_media_type=body_media_type,
+            )
+        )
+        return (
+            await self.request_raw(
+                operation_id,
+                path=path_values,
+                query=query_values,
+                headers=header_values,
+                body=json_body,
+                files=files,
+                form=form,
+            )
+        ).content
+
+    async def _generated_text(
+        self,
+        operation_id: OperationId,
+        *,
+        path: object,
+        query: object,
+        headers: object,
+        body: object,
+        body_media_type: str | None,
+    ) -> str:
+        path_values, query_values, header_values, json_body, files, form = (
+            _generated_values(
+                path=path,
+                query=query,
+                headers=headers,
+                body=body,
+                body_media_type=body_media_type,
+            )
+        )
+        return (
+            await self.request_raw(
+                operation_id,
+                path=path_values,
+                query=query_values,
+                headers=header_values,
+                body=json_body,
+                files=files,
+                form=form,
+            )
+        ).text
+
+    async def _generated_stream(
+        self,
+        operation_id: OperationId,
+        *,
+        path: object,
+        query: object,
+        headers: object,
+        body: object,
+        body_media_type: str | None,
+    ) -> AsyncIterator[bytes]:
+        path_values, query_values, header_values, _, _, _ = _generated_values(
+            path=path,
+            query=query,
+            headers=headers,
+            body=body,
+            body_media_type=body_media_type,
+        )
+        async with self.stream(
+            operation_id,
+            path=path_values,
+            query=query_values,
+            headers=header_values,
+        ) as response:
+            async for chunk in response.aiter_bytes():
+                yield chunk
+
+    async def _generated_none(
+        self,
+        operation_id: OperationId,
+        *,
+        path: object,
+        query: object,
+        headers: object,
+        body: object,
+        body_media_type: str | None,
+    ) -> None:
+        await self._generated_bytes(
+            operation_id,
+            path=path,
+            query=query,
+            headers=headers,
+            body=body,
+            body_media_type=body_media_type,
+        )
+
     async def request_raw(
         self,
         operation_id: OperationId,
@@ -332,6 +690,7 @@ class AsyncParserServeClient:
         headers: Mapping[str, str] | None = None,
         body: StrictSchema | object | None = None,
         files: Mapping[str, UploadFile] | None = None,
+        form: Mapping[str, str] | None = None,
     ) -> httpx.Response:
         method, url, params, request_headers = _request_parts(
             operation_id,
@@ -346,6 +705,7 @@ class AsyncParserServeClient:
             params=params,
             headers=request_headers,
             json=_json_body(body) if files is None else None,
+            data=form,
             files=tuple(files.items()) if files is not None else None,
         )
         if not response.is_success:
@@ -362,6 +722,7 @@ class AsyncParserServeClient:
         headers: Mapping[str, str] | None = None,
         body: StrictSchema | object | None = None,
         files: Mapping[str, UploadFile] | None = None,
+        form: Mapping[str, str] | None = None,
     ) -> ResponseT:
         response = await self.request_raw(
             operation_id,
@@ -370,6 +731,7 @@ class AsyncParserServeClient:
             headers=headers,
             body=body,
             files=files,
+            form=form,
         )
         adapter = (
             response_type
@@ -461,6 +823,8 @@ __all__ = [
     "ParserServeClient",
     "QueryValue",
     "Scalar",
+    "SdkErrorDetail",
+    "SdkErrorResponse",
     "UploadContent",
     "UploadFile",
 ]
